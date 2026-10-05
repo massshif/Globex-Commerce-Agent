@@ -134,7 +134,9 @@ def load_settings() -> Settings:
         tool_circuit_reset_seconds=float(os.getenv("TOOL_CIRCUIT_RESET_SECONDS", "60")),
         cors_origins=[
             origin.strip()
-            for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+            for origin in os.getenv(
+                "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+            ).split(",")
             if origin.strip()
         ],
         # 实测 qwen3.7-plus 配额池极紧（单发一条也可能 429），默认配上备用模型保底，
