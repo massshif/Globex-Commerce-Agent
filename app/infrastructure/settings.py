@@ -33,7 +33,7 @@ class Settings:
     embedding_base_url: str
     embedding_api_key: str
     embedding_model: str
-    embedding_dim: int  # 知识库建库需显式维度（text-embedding-v4 实测 1024）
+    embedding_dim: int  # 知识库建库需显式维度（qwen3.7-text-embedding 实测 1024）
     qdrant_url: str  # 空 = qdrant-client 本地嵌入模式（DATA_DIR/qdrant）
     qdrant_collection: str
     reranker_base_url: str  # 空 = 降级为按向量分排序
@@ -116,7 +116,7 @@ def load_settings() -> Settings:
         # embedding 默认复用 LLM 网关（OpenAI 兼容 /v1/embeddings）
         embedding_base_url=os.getenv("EMBEDDING_BASE_URL", llm_base_url),
         embedding_api_key=os.getenv("EMBEDDING_API_KEY", llm_api_key),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-v4"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
         embedding_dim=int(os.getenv("EMBEDDING_DIM", "1024")),
         qdrant_url=os.getenv("QDRANT_URL", ""),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "globex_products"),

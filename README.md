@@ -16,7 +16,7 @@
 - Python 3.11 + uv
 - AgentScope 2.x（Agent + ContextConfig 上下文压缩 + Toolkit/FunctionTool + 内置 Task 计划工具
   + reply_stream 类型化事件流 + TracingMiddleware / ReplyBudgetControlMiddleware / 自定义工具中间件）
-- 检索：OpenAI 兼容 embedding（text-embedding-v4）+ Qdrant（服务端/本地嵌入双形态）+ HTTP Reranker（可降级）
+- 检索：OpenAI 兼容 embedding（qwen3.7-text-embedding）+ Qdrant（服务端/本地嵌入双形态）+ HTTP Reranker（可降级）
 - 知识库：AgentScope `rag.KnowledgeBase`（品类洞察 Markdown → 切片 → Qdrant）
 - FastAPI + Uvicorn + WebSocket；另提供 `/ag-ui/agent` 的 AG-UI 风格 SSE 事件流；React 18 + Vite + TS 前端；Docker Compose（app + worker + qdrant + redis + frontend）
 - 持久化：SQLite（SQLAlchemy 2.0 async）存对话流水/事件轨迹/会话状态/订单/偏好；商品目录仍为内存仓储 + 种子数据
