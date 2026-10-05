@@ -23,8 +23,12 @@ from app.infrastructure.eventbus import TradeEventBus
 def build_product_search_tool(usecase: CatalogSearchUseCase, bus: TradeEventBus):
     async def product_search_tool(
         normalized_query: str,
+        product_id: Optional[str] = None,
+        sku_id: Optional[str] = None,
         category: Optional[str] = None,
         ship_to: Optional[str] = None,
+        origin_country: Optional[str] = None,
+        material: Optional[str] = None,
         top_k: int | str = 5,
         price_max_major: float | str | None = None,
         target_currency: str = "CNY",
@@ -36,10 +40,18 @@ def build_product_search_tool(usecase: CatalogSearchUseCase, bus: TradeEventBus)
         Args:
             normalized_query (`str`):
                 标准化检索词，保留品类词与关键属性词（如"旅行三件套 抗造 轻便 无塑料"）。
+            product_id (`str | None`):
+                已知商品 ID 时传入，走权威目录精确查询；未找到不替换成相似商品。
+            sku_id (`str | None`):
+                已知 SKU ID 时传入，精确核验规格和库存。
             category (`str | None`):
                 品类槽位，可选，如"旅行装备"、"数码配件"。
             ship_to (`str | None`):
                 收货国家二位码，可选，如 "CN"、"US"；传入后过滤不可送达商品并内联到手价。
+            origin_country (`str | None`):
+                原产国家二位码硬约束。
+            material (`str | None`):
+                商品材质硬约束，按目录材质字段核验。
             top_k (`int`):
                 返回候选数量，默认 5。
             price_max_major (`float | None`):
@@ -68,8 +80,12 @@ def build_product_search_tool(usecase: CatalogSearchUseCase, bus: TradeEventBus)
         session_id = ShoppingContext.current_session_id()
         args = {
             "normalized_query": normalized_query,
+            "product_id": product_id,
+            "sku_id": sku_id,
             "category": category,
             "ship_to": ship_to,
+            "origin_country": origin_country,
+            "material": material,
             "top_k": top_k,
             "price_max_major": price_max_major,
             "target_currency": target_currency,
@@ -78,8 +94,12 @@ def build_product_search_tool(usecase: CatalogSearchUseCase, bus: TradeEventBus)
         try:
             spec = ProductSearchSpec(
                 normalized_query=normalized_query,
+                product_id=product_id,
+                sku_id=sku_id,
                 category=category,
                 ship_to=ship_to,
+                origin_country=origin_country,
+                material=material,
                 top_k=top_k,
                 price_max_major=price_max_major,
                 target_currency=target_currency,

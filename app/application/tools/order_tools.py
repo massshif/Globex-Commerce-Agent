@@ -19,6 +19,7 @@ from app.application.usecases.order_usecases import (
 from app.domain.order.address import Address
 from app.infrastructure.context import ShoppingContext
 from app.infrastructure.eventbus import TradeEventBus
+from app.infrastructure.sql.trade_store import TradeStore
 
 
 def _ok(payload: dict) -> ToolChunk:
@@ -35,12 +36,22 @@ def _fail(message: str) -> ToolChunk:
     )
 
 
-def build_create_order_tool(usecase: PlaceOrderUseCase, bus: TradeEventBus):
+def build_show_shopping_form_tool(bus: TradeEventBus):
+    async def show_shopping_form(questions: list[dict]) -> ToolChunk:
+        """Render a schema driven clarification form; submission is not approval."""
+        session_id = ShoppingContext.current_session_id()
+        schema = {"questions": questions, "title": "补充购物信息", "type": "shopping_form"}
+        bus.publish(session_id, "shopping.form", schema)
+        return _ok({"form": schema, "note": "表单回答不等于交易批准"})
+    return show_shopping_form
+
+
+def build_create_order_tool(usecase: PlaceOrderUseCase, bus: TradeEventBus, trade_store: TradeStore | None = None):
     async def create_order_tool(
         items: list[dict],
         shipping_address: dict,
     ) -> ToolChunk:
-        """创建订单（直接进入 CONFIRMED 态）。必须在买家确认后调用。买家身份由系统会话上下文自动注入。
+        """准备订单确认卡。买家在页面批准后才会提交订单和扣减库存。
 
         Args:
             items (`list[dict]`):
@@ -55,6 +66,11 @@ def build_create_order_tool(usecase: PlaceOrderUseCase, bus: TradeEventBus):
         session_id = ShoppingContext.current_session_id()
         bus.publish(session_id, "tool.invoke", {"tool": "create_order_tool", "args": {"buyer_id": buyer_id, "items": items}})
         try:
+            if trade_store is not None:
+                confirmation = trade_store.prepare_order(buyer_id, session_id, items, shipping_address)
+                bus.publish(session_id, "confirmation.required", confirmation)
+                bus.publish(session_id, "tool.result", {"tool": "create_order_tool", "confirmation": confirmation})
+                return _ok({"pending_confirmation": confirmation})
             order_items = [
                 OrderItemInput(
                     product_id=item["product_id"],
@@ -82,7 +98,7 @@ def build_create_order_tool(usecase: PlaceOrderUseCase, bus: TradeEventBus):
     return create_order_tool
 
 
-def build_query_order_tool(usecase: QueryOrderUseCase, bus: TradeEventBus):
+def build_query_order_tool(usecase: QueryOrderUseCase, bus: TradeEventBus, trade_store: TradeStore | None = None):
     async def query_order_tool(order_id: str) -> ToolChunk:
         """查询订单详情。
 
@@ -93,7 +109,10 @@ def build_query_order_tool(usecase: QueryOrderUseCase, bus: TradeEventBus):
         session_id = ShoppingContext.current_session_id()
         bus.publish(session_id, "tool.invoke", {"tool": "query_order_tool", "args": {"order_id": order_id}})
         try:
-            snapshot = await usecase.execute(order_id)
+            ctx = ShoppingContext.current()
+            snapshot = trade_store.get_order(order_id, ctx.buyer_id) if trade_store is not None and ctx else None
+            if snapshot is None:
+                snapshot = await usecase.execute(order_id)
         except ValueError as err:
             bus.publish(session_id, "tool.result", {"tool": "query_order_tool", "error": str(err)})
             return _fail(str(err))
@@ -103,9 +122,9 @@ def build_query_order_tool(usecase: QueryOrderUseCase, bus: TradeEventBus):
     return query_order_tool
 
 
-def build_cancel_order_tool(usecase: CancelOrderUseCase, bus: TradeEventBus):
+def build_cancel_order_tool(usecase: CancelOrderUseCase, bus: TradeEventBus, trade_store: TradeStore | None = None):
     async def cancel_order_tool(order_id: str, reason: str) -> ToolChunk:
-        """取消订单（仅 CONFIRMED 态可取消），取消后自动回补库存。
+        """准备取消确认卡；买家批准后才取消并回补库存。
 
         Args:
             order_id (`str`):
@@ -116,6 +135,12 @@ def build_cancel_order_tool(usecase: CancelOrderUseCase, bus: TradeEventBus):
         session_id = ShoppingContext.current_session_id()
         bus.publish(session_id, "tool.invoke", {"tool": "cancel_order_tool", "args": {"order_id": order_id, "reason": reason}})
         try:
+            if trade_store is not None:
+                ctx = ShoppingContext.current()
+                confirmation = trade_store.prepare_cancel(ctx.buyer_id, session_id, order_id, reason)
+                bus.publish(session_id, "confirmation.required", confirmation)
+                bus.publish(session_id, "tool.result", {"tool": "cancel_order_tool", "confirmation": confirmation})
+                return _ok({"pending_confirmation": confirmation})
             snapshot = await usecase.execute(order_id, reason)
         except ValueError as err:
             bus.publish(session_id, "tool.result", {"tool": "cancel_order_tool", "error": str(err)})

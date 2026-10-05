@@ -25,3 +25,13 @@ class SubmitIntentResponse(BaseModel):
 
 class CancelOrderRequest(BaseModel):
     reason: str = Field(min_length=1, description="取消原因")
+
+
+class PermissionConfirmRequest(BaseModel):
+    confirmed: bool = Field(description="是否允许本次记忆写操作")
+
+
+class TradeConfirmRequest(BaseModel):
+    operation_id: str
+    draft_hash: str
+    approved: bool

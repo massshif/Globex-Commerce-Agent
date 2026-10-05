@@ -40,6 +40,7 @@ EVENT_TYPES = (
     "task.started",
     "final.result",
     "error",
+    "permission.request",
 )
 
 

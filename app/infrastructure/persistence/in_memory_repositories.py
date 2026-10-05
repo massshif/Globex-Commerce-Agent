@@ -42,5 +42,8 @@ class InMemoryOrderRepository(OrderRepository):
     async def find_by_id(self, order_id: str) -> Optional[Order]:
         return self._orders.get(order_id)
 
+    async def list_by_buyer(self, buyer_id: str) -> list[Order]:
+        return [order for order in self._orders.values() if order.buyer_id == buyer_id]
+
     async def next_order_id(self) -> str:
         return f"GBX-{next(self._counter):06d}"

@@ -21,5 +21,10 @@ class OrderRepository(ABC):
         ...
 
     @abstractmethod
+    async def list_by_buyer(self, buyer_id: str) -> list[Order]:
+        """List a buyer's orders for the order history view."""
+        ...
+
+    @abstractmethod
     async def next_order_id(self) -> str:
         ...

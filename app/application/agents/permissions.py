@@ -13,15 +13,13 @@ from __future__ import annotations
 from agentscope.agent import Agent
 from agentscope.permission import PermissionBehavior, PermissionRule
 
-# 对话层已有确认卡语义的业务写工具 + 内置计划工具 + 调度/记忆工具
+# 对话层已有确认卡语义的订单写工具 + 内置计划工具 + 调度工具。
+# 记忆写工具刻意不放进白名单：它必须走 AgentScope 原生 ASK，
+# 与订单的持久确认资源分开，避免两套审批语义混用。
 _AUTO_ALLOWED_TOOLS = (
     "create_order_tool",
     "cancel_order_tool",
     "task_dispatch",
-    "remember_preference_tool",
-    # 撤回偏好与记住偏好对称：买家已在对话里明确说“以后不用避开塑料了”，
-    # 再弹一次工具层确认卡是重复询问；且误删风险由精确匹配兜底
-    "forget_preference_tool",
     "TaskCreate",
     "TaskUpdate",
     "TaskList",

@@ -42,15 +42,17 @@ from app.application.tools.remember_preference_tool import build_remember_prefer
 from app.application.tools.task_dispatch_tool import build_task_dispatch_tool
 from app.domain.buyer.preference import PreferenceStore
 from app.domain.session.ports.session_store import SessionStore
+from app.infrastructure.context_evidence import ContextEvidenceStore, EvidenceToolMiddleware
 from app.infrastructure.eventbus import TradeEventBus
 from app.infrastructure.harness_middleware import HarnessToolMiddleware
 from app.infrastructure.llm import create_chat_model
-from app.infrastructure.throttle import GatewayThrottle
 from app.infrastructure.resilience import (
     CircuitBreakerRegistry,
     ToolResilienceMiddleware,
 )
+from app.infrastructure.session_fence import SessionFence
 from app.infrastructure.settings import Settings
+from app.infrastructure.throttle import GatewayThrottle
 from app.infrastructure.tracing import build_agent_middlewares
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,7 @@ class MainAgentFactory:
         sequencing: Optional[SequencingTracker] = None,
         loop_detector: Optional[LoopDetector] = None,
         preference_selector: Optional[PreferenceSelector] = None,
+        evidence_store: Optional[ContextEvidenceStore] = None,
     ) -> None:
         self._settings = settings
         self._search_factory = search_factory
@@ -84,6 +87,7 @@ class MainAgentFactory:
         self._loop_detector = loop_detector or LoopDetector(
             repeat_threshold=settings.loop_repeat_threshold,
         )
+        self._evidence_store = evidence_store
 
     def _resilience(self) -> list:
         """工具中间件链。
@@ -92,6 +96,8 @@ class MainAgentFactory:
         再进超时与熔断保护；这样被硬拒的调用不会白白占用一次熔断名额。
         """
         chain: list = []
+        if self._evidence_store is not None:
+            chain.append(EvidenceToolMiddleware(self._evidence_store))
         if self._settings.harness_enabled:
             chain.append(
                 HarnessToolMiddleware(
@@ -148,7 +154,7 @@ class MainAgentFactory:
                 system_prompt=prompts["system_prompt"],
                 model=create_chat_model(self._settings, throttle=self._throttle, bus=self._bus),
                 toolkit=Toolkit(tools=tools),
-                middlewares=build_agent_middlewares(self._settings),
+                middlewares=build_agent_middlewares(self._settings, self._evidence_store),
                 context_config=build_context_config(
                     self._settings.context_size,
                     self._settings.tool_result_limit,
@@ -161,28 +167,42 @@ class MainAgentFactory:
 
 class SessionRegistry:
     """按 shopping_session_id 缓存 MainAgent 实例，支撑多轮对话；
-    AgentState 经 SessionStore 端口落盘（SQLite 或文件），服务重启后恢复。"""
+    AgentState 经 SessionStore 端口落盘（SQLite 或文件），服务重启后恢复。
+
+    每个会话带一个 revision + fence：同一会话的恢复、Agent 创建和快照写入
+    不能并发交错，避免旧轮次覆盖新轮次的 AgentState。
+    """
 
     def __init__(self, main_factory: MainAgentFactory, session_store: SessionStore) -> None:
         self._main_factory = main_factory
         self._session_store = session_store
         self._agents: dict[str, Agent] = {}
+        self._fences: dict[str, SessionFence] = {}
+
+    def _fence(self, shopping_session_id: str) -> SessionFence:
+        return self._fences.setdefault(shopping_session_id, SessionFence())
 
     async def get_or_create(self, shopping_session_id: str) -> Agent:
-        if shopping_session_id not in self._agents:
-            restored_state = await self._try_restore(shopping_session_id)
-            self._agents[shopping_session_id] = self._main_factory.build(restored_state)
-        return self._agents[shopping_session_id]
+        fence = self._fence(shopping_session_id)
+        async with fence.lock:
+            if shopping_session_id not in self._agents:
+                restored_state = await self._try_restore(shopping_session_id)
+                self._agents[shopping_session_id] = self._main_factory.build(restored_state)
+            return self._agents[shopping_session_id]
 
     async def persist(self, shopping_session_id: str) -> None:
         """每轮对话结束后落盘 AgentState 快照；失败仅告警不影响主链路。"""
         agent = self._agents.get(shopping_session_id)
         if agent is None:
             return
-        try:
-            await self._session_store.save(shopping_session_id, agent.state.model_dump_json())
-        except Exception as err:  # noqa: BLE001
-            logger.warning("会话状态落盘失败：%s（%s）", shopping_session_id, err)
+        fence = self._fence(shopping_session_id)
+        async with fence.lock:
+            revision = fence.next_revision()
+            try:
+                await self._session_store.save(shopping_session_id, agent.state.model_dump_json())
+                logger.debug("会话状态已持久化：%s revision=%d", shopping_session_id, revision)
+            except Exception as err:  # noqa: BLE001
+                logger.warning("会话状态落盘失败：%s（%s）", shopping_session_id, err)
 
     async def _try_restore(self, shopping_session_id: str) -> Optional[AgentState]:
         try:

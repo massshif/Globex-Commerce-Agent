@@ -14,7 +14,6 @@ from agentscope.rag import KnowledgeBase, QdrantStore
 from agentscope.tool import FunctionTool, ToolChunk
 
 from app.application.agents.context_policy import build_context_config
-from app.infrastructure.transient import is_transient_error as _is_transient
 from app.application.tools.category_insight_tool import build_category_insight_tool
 from app.infrastructure.eventbus import TradeEventBus
 from app.infrastructure.rag.category_knowledge import bootstrap_category_knowledge
@@ -22,6 +21,7 @@ from app.infrastructure.resilience import (
     CircuitBreakerRegistry,
     ToolResilienceMiddleware,
 )
+from app.infrastructure.transient import is_transient_error as _is_transient
 
 _TERMS = ("露营灯", "登山杖", "免税额度", "塑料", "茶具", "耳机", "行李箱", "运费")
 

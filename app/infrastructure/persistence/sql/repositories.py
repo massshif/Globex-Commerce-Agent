@@ -244,6 +244,19 @@ class SqlOrderRepository(OrderRepository):
             ).all()
         return _row_to_order(row, line_rows)
 
+    async def list_by_buyer(self, buyer_id: str) -> list[Order]:
+        async with self._session_factory() as db:
+            rows = (await db.scalars(
+                select(OrderRow).where(OrderRow.buyer_id == buyer_id).order_by(OrderRow.created_at.desc()),
+            )).all()
+            result: list[Order] = []
+            for row in rows:
+                line_rows = (await db.scalars(
+                    select(OrderLineRow).where(OrderLineRow.order_id == row.order_id),
+                )).all()
+                result.append(_row_to_order(row, line_rows))
+            return result
+
     async def next_order_id(self) -> str:
         """按已有订单数递增。生产应改用独立序列或雪花 ID，避免并发撞号。"""
         async with self._session_factory() as db:

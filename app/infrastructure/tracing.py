@@ -15,6 +15,8 @@ import logging
 
 from agentscope.middleware import ReplyBudgetControlMiddleware, TracingMiddleware
 
+from app.infrastructure.context_evidence import ContextEvidenceStore
+from app.infrastructure.context_governance import EvidenceCompressionMiddleware
 from app.infrastructure.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,13 @@ def setup_tracing(settings: Settings) -> None:
     logger.info("OTel tracing 已启用：%s", settings.otlp_endpoint)
 
 
-def build_agent_middlewares(settings: Settings) -> list:
+def build_agent_middlewares(settings: Settings, evidence_store: ContextEvidenceStore | None = None) -> list:
     """全部 Agent 统一的中间件列表（Trace + 可选 Token 预算）。"""
     middlewares: list = [TracingMiddleware()]
+    if evidence_store is not None:
+        middlewares.append(EvidenceCompressionMiddleware(
+            evidence_store, settings.context_evidence_keep_recent,
+        ))
     if settings.reply_token_budget > 0:
         middlewares.append(
             ReplyBudgetControlMiddleware(

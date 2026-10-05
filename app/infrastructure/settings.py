@@ -58,6 +58,7 @@ class Settings:
     # 这组给默认值：前面几期每次扩字段都会打断测试里手工构造的 Settings，
     # 新增可选配置一律带默认值，避免同样的修改成本反复发生。
     llm_fallback_model: str = ""  # 空 = 不回退，重试用尽直接报错
+    context_evidence_keep_recent: int = 5
     llm_max_concurrency: int = 2  # 同时在飞的模型请求上限
     llm_min_interval_seconds: float = 1.0  # 相邻请求起跑最小间隔，治速率爬升过快
     llm_max_retries: int = 2  # 瞬时故障重试次数（指数退避）
@@ -87,6 +88,10 @@ class Settings:
     preference_relevance_enabled: bool = False  # 向量相关性筛选，每轮多一次 embedding，默认关
     preference_top_k: int = 5  # like 注入上限；dislike（黑名单）不受此限
     preference_subagent_inject: bool = True  # 给检索子 Agent 注入偏好（纯本地拼装，零成本）
+    hybrid_recall_enabled: bool = False  # BM25 + Qdrant 双路召回；默认关闭
+    retrieval_bm25_weight: float = 1.0
+    retrieval_vector_weight: float = 1.0
+    retrieval_eval_trace_enabled: bool = False
     queue_priority_enabled: bool = True  # 双队列优先级（无 Redis 时自动无效）
     queue_large_request_turns: int = 30  # 对话轮数 >= 此值走大请求队列
 
@@ -123,6 +128,7 @@ def load_settings() -> Settings:
         category_kb_collection=os.getenv("CATEGORY_KB_COLLECTION", "globex_category_kb"),
         context_size=int(os.getenv("CONTEXT_SIZE", "128000")),
         tool_result_limit=int(os.getenv("TOOL_RESULT_LIMIT", "20000")),
+        context_evidence_keep_recent=int(os.getenv("CONTEXT_EVIDENCE_KEEP_RECENT", "5")),
         reply_token_budget=int(os.getenv("REPLY_TOKEN_BUDGET", "0")),
         tool_failure_threshold=int(os.getenv("TOOL_FAILURE_THRESHOLD", "3")),
         tool_circuit_reset_seconds=float(os.getenv("TOOL_CIRCUIT_RESET_SECONDS", "60")),
@@ -161,6 +167,10 @@ def load_settings() -> Settings:
         preference_top_k=int(os.getenv("PREFERENCE_TOP_K", "5")),
         preference_subagent_inject=os.getenv("PREFERENCE_SUBAGENT_INJECT", "1")
         not in ("0", "false", "False"),
+        hybrid_recall_enabled=os.getenv("HYBRID_RECALL_ENABLED", "0") not in ("0", "false", "False"),
+        retrieval_bm25_weight=float(os.getenv("RETRIEVAL_BM25_WEIGHT", "1")),
+        retrieval_vector_weight=float(os.getenv("RETRIEVAL_VECTOR_WEIGHT", "1")),
+        retrieval_eval_trace_enabled=os.getenv("RETRIEVAL_EVAL_TRACE_ENABLED", "0") not in ("0", "false", "False"),
         queue_priority_enabled=os.getenv("QUEUE_PRIORITY_ENABLED", "1") not in ("0", "false", "False"),
         queue_large_request_turns=int(os.getenv("QUEUE_LARGE_REQUEST_TURNS", "30")),
     )

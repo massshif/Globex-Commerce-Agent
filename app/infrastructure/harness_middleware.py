@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
@@ -85,16 +86,6 @@ class HarnessToolMiddleware(ToolMiddlewareBase):
             return
         notices.extend(seq.warnings)
 
-        # ---- pre_tool_call：循环检测 ----
-        converge_hint = self._loop_detector.check(session_id, tool_name)
-        if converge_hint:
-            logger.info("Harness 循环收敛提示：%s", tool_name)
-            self._publish(tool_name, {"harness": "loop_detected"})
-            notices.append(converge_hint)
-
-        # 记录调用（供后续顺序断言使用）
-        self._sequencing.record(session_id, tool_name)
-
         # ---- 执行工具 ----
         chunks: list[ToolChunk] = []
         async for chunk in next_handler(**input_kwargs):
@@ -109,6 +100,19 @@ class HarnessToolMiddleware(ToolMiddlewareBase):
             yield chunk
 
         text = _chunk_text(last)
+        # 只有真正执行完成的调用才进入顺序历史；被前置校验硬拒的不算。
+        self._sequencing.record(session_id, tool_name)
+
+        # ---- post_tool_call：循环收敛判定 ----
+        try:
+            signature = f"{tool_name}:{json.dumps(input_kwargs, ensure_ascii=False, sort_keys=True, default=str)}:{text}"
+        except Exception:  # noqa: BLE001
+            signature = tool_name
+        converge_hint = self._loop_detector.check(session_id, tool_name, signature=signature)
+        if converge_hint:
+            logger.info("Harness 循环收敛提示：%s", tool_name)
+            self._publish(tool_name, {"harness": "loop_detected"})
+            notices.append(converge_hint)
 
         # Schema 断言
         schema_outcome = check_schema(tool_name, text)

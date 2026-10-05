@@ -41,6 +41,9 @@ class LoopDetector:
     _calls: dict[str, Deque[str]] = field(
         default_factory=lambda: defaultdict(lambda: deque(maxlen=DEFAULT_WINDOW)),
     )
+    _signatures: dict[str, Deque[str]] = field(
+        default_factory=lambda: defaultdict(lambda: deque(maxlen=DEFAULT_WINDOW)),
+    )
 
     def _bucket(self, session_id: str) -> Deque[str]:
         bucket = self._calls[session_id]
@@ -63,14 +66,23 @@ class LoopDetector:
             count += 1
         return count
 
-    def check(self, session_id: str, tool_name: str) -> Optional[str]:
+    def check(self, session_id: str, tool_name: str, signature: str | None = None) -> Optional[str]:
         """记录本次调用并判断是否需要收敛提示。
 
         Returns:
             需要提示时返回提示文本，否则 None。
         """
         self.record(session_id, tool_name)
-        count = self.trailing_repeat(session_id, tool_name)
+        signatures = self._signatures[session_id]
+        if signatures.maxlen != self.window:
+            signatures = deque(signatures, maxlen=self.window)
+            self._signatures[session_id] = signatures
+        signatures.append(signature or tool_name)
+        count = 0
+        for name, sig in zip(reversed(self._bucket(session_id)), reversed(signatures)):
+            if name != tool_name or sig != (signature or tool_name):
+                break
+            count += 1
         if count >= self.repeat_threshold:
             return CONVERGE_HINT.format(count=count, tool=tool_name)
         return None
@@ -78,3 +90,4 @@ class LoopDetector:
     def reset(self, session_id: str) -> None:
         """一轮意图结束后清理，避免跨轮误判。"""
         self._calls.pop(session_id, None)
+        self._signatures.pop(session_id, None)

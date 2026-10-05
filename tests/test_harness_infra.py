@@ -6,8 +6,6 @@
 """
 import json
 
-import pytest
-
 from app.domain.queue.ports.task_queue import IntentTask
 from app.infrastructure.queue.redis_stream_queue import (
     _LARGE_STREAM,

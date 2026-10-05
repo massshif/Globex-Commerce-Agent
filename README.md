@@ -18,7 +18,7 @@
   + reply_stream 类型化事件流 + TracingMiddleware / ReplyBudgetControlMiddleware / 自定义工具中间件）
 - 检索：OpenAI 兼容 embedding（text-embedding-v4）+ Qdrant（服务端/本地嵌入双形态）+ HTTP Reranker（可降级）
 - 知识库：AgentScope `rag.KnowledgeBase`（品类洞察 Markdown → 切片 → Qdrant）
-- FastAPI + Uvicorn + WebSocket；React 18 + Vite + TS 前端；Docker Compose（app + worker + qdrant + redis + frontend）
+- FastAPI + Uvicorn + WebSocket；另提供 `/ag-ui/agent` 的 AG-UI 风格 SSE 事件流；React 18 + Vite + TS 前端；Docker Compose（app + worker + qdrant + redis + frontend）
 - 持久化：SQLite（SQLAlchemy 2.0 async）存对话流水/事件轨迹/会话状态/订单/偏好；商品目录仍为内存仓储 + 种子数据
 - 缓存与削峰：Redis（可选）——语义缓存 + embedding 缓存 + 幂等键 + Stream 任务队列 + 跨进程事件背板
 
@@ -60,8 +60,8 @@ docker/                # docker-compose.yaml（app + worker + qdrant + redis + f
   广播带 `origin` 标识以跳过自己发的消息（否则事件会回环投递两次）
 - **主 Agent 单干优先**：MainAgent 与子 Agent 持有同一批业务工具（`build_tools()` 复用），
   只在"可并行 / 上下文隔离 / 调用链深"时派发
-- **二阶段召回**：embed → Qdrant 向量召回 topN → rerank 精排 topK；降级链
-  embedding_rerank → embedding_only → keyword_2gram，`recall_strategy` 如实标注；
+- **检索与精排**：已知 product/SKU ID 走精确目录通道；自然语言可选 BM25 + Qdrant 双路召回与 RRF 融合，
+  先做国家/材质/库存/价格等硬约束过滤，再调用 HTTP reranker 精排；服务不可用时保留召回顺序并标记降级策略。
   价格等硬约束走工具参数结构化过滤（price_max_major），不交给模型
 - **过滤可观测**：被 ship_to / 价格上限挡掉的候选以 `filtered_out`（含 reason）回传，
   让模型能区分"库里没有"与"有但不满足约束"，避免把超预算商品答成"没有这个商品"
@@ -75,7 +75,7 @@ docker/                # docker-compose.yaml（app + worker + qdrant + redis + f
   `scripts/verify_parallel.py` 用事件时间戳比对并行/串行墙钟耗时
 - **到手价内联**：传 ship_to 时商品卡自动内联 landed_price（小计+运费+关税，汇率统一折算），
   比价/运费不单独暴露工具，减少不必要的工具调用轮次
-- **长期记忆**：写路径 remember_preference_tool → JSON 文件 Store；读路径 orchestrator
+- **长期记忆**：写路径 remember_preference_tool → SQLite/JSON 可替换 Store；读路径 orchestrator
   在偏好变化时注入 `<buyer-preferences>` hint，跨会话、跨重启生效
 - **会话持久化**：AgentState 每轮落盘 DATA_DIR/sessions/，服务重启后恢复多轮对话
 - **SubAgent as Tool**：2.0 库级无 subagent 原语（官方 Agent Team 在 agentscope.app 平台层），
@@ -104,7 +104,19 @@ uv run python -m app.worker
 ## API 概览
 
 - `POST /commerce/intents` 提交买家自然语言意图（同步返回最终回复）
+- `POST /ag-ui/agent` 以 SSE 返回 AG-UI 生命周期、文本增量和工具调用事件
 - `WS   /commerce/events` 订阅会话事件流（连上后先发 `{"shopping_session_id": "..."}`）
+- `GET  /commerce/preferences/{buyer_id}` 查询买家长期偏好
+- `GET  /commerce/orders?buyer_id=...` 查询买家订单列表
+- `POST /commerce/sessions/{session_id}/confirm` 继续 AgentScope 原生 ASK 的记忆写操作
+- `POST /commerce/sessions/{session_id}/trade-confirm` 批准或拒绝订单确认快照
+- `GET  /commerce/sessions/{session_id}/history?buyer_id=...` 恢复业务事件历史
+- `GET  /commerce/context-evidence/{buyer_id}/{session_id}?page=1&limit=5` 分页回查归档证据
+
+上下文统一采用分层治理：完整工具调用/结果先写入 `DATA_DIR/context_evidence/`，最近 5 组结果在
+AgentScope 压缩时保持原文，更早结果在上下文中改为 `[evidence:<id>]` 引用。达到
+`CONTEXT_SIZE * 0.75` 后，AgentScope 压缩其余早期对话历史；证据按买家和会话隔离，可通过
+`ContextEvidenceStore` 分页回查。
 - `GET  /commerce/orders/{order_id}` 查询订单
 - `POST /commerce/orders/{order_id}/cancel` 取消订单
 - `GET  /health` 健康检查
@@ -112,7 +124,7 @@ uv run python -m app.worker
 ## 验证
 
 ```bash
-uv run pytest                          # 137 个单测：domain / 召回降级与过滤回传 / 计价规则 / 记忆持久化 / 压缩策略 / 韧性中间件
+uv run pytest                          # 当前测试集：domain / 召回降级与过滤回传 / 计价规则 / 记忆持久化 / 压缩策略 / 韧性中间件
 uv run python scripts/smoke_e2e.py    # 端到端冒烟：WS 订阅 + 提交意图，实时打印事件流
 uv run python scripts/verify_parallel.py   # 并行验证：同轮多派 vs 串行的墙钟耗时与事件重叠数对比
 uv run python scripts/eval_regression.py   # 评测回归：13 条 case，LLM judge 按 P0/P1/P2 Rubric 打分出报告

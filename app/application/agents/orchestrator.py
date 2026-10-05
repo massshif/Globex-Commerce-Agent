@@ -28,9 +28,12 @@ from typing import Any, Optional
 
 from agentscope.agent import Agent
 from agentscope.event import (
+    ConfirmResult,
+    RequireUserConfirmEvent,
     TextBlockDeltaEvent,
     ToolCallStartEvent,
     ToolResultEndEvent,
+    UserConfirmResultEvent,
 )
 from agentscope.message import Msg, UserMsg
 
@@ -49,10 +52,12 @@ from app.domain.session.ports.conversation_store import (
     ConversationTurn,
 )
 from app.domain.session.ports.session_store import SessionStore  # noqa: F401 —— 保留类型引用
+from app.infrastructure.budget import init_budget
 from app.infrastructure.cache.semantic_cache import SemanticCache
 from app.infrastructure.context import ShoppingContext, ShoppingContextSnapshot
+from app.infrastructure.context_evidence import ContextEvidenceStore
+from app.infrastructure.context_governance import prune_read_results
 from app.infrastructure.eventbus import TradeEventBus
-from app.infrastructure.budget import init_budget
 from app.infrastructure.security.output_guard import audit_output
 from app.infrastructure.transient import is_transient_error
 
@@ -107,6 +112,8 @@ class MainAgentOrchestrator:
         drift_detector: Optional[DriftDetector] = None,
         preference_selector: Optional[PreferenceSelector] = None,
         preference_top_k: int = 5,
+        evidence_store: Optional[ContextEvidenceStore] = None,
+        context_evidence_keep_recent: int = 5,
     ) -> None:
         self._sessions = sessions
         self._bus = bus
@@ -120,8 +127,16 @@ class MainAgentOrchestrator:
         # 默认 selector 不带 embedder，退化为“按时间倒序取 top_k”，单测与无凭据环境可直接跑
         self._preference_selector = preference_selector or PreferenceSelector()
         self._preference_top_k = preference_top_k
+        self._evidence_store = evidence_store
+        self._context_evidence_keep_recent = context_evidence_keep_recent
         # 会话内已注入的偏好快照，变化时才重新注入，避免每轮重复填充上下文
         self._injected_preferences: dict[str, str] = {}
+        self._pending_confirmations: dict[str, RequireUserConfirmEvent] = {}
+        self._last_intents: dict[str, SubmitIntentInput] = {}
+
+    def last_intent(self, session_id: str) -> Optional[SubmitIntentInput]:
+        """Return the authenticated session intent without exposing internal storage."""
+        return self._last_intents.get(session_id)
 
     def _guard_final_text(self, session_id: str, text: str) -> str:
         """L4 输出审核：最终回复推给买家前脱敏内部信息。
@@ -139,6 +154,7 @@ class MainAgentOrchestrator:
 
     async def handle_intent(self, intent: SubmitIntentInput) -> SubmitIntentOutput:
         session_id = intent.shopping_session_id
+        self._last_intents[session_id] = intent
         snapshot = ShoppingContextSnapshot(
             shopping_session_id=session_id,
             buyer_id=intent.buyer_id,
@@ -172,6 +188,11 @@ class MainAgentOrchestrator:
             await self._check_drift(session_id)
 
             self._publish_compression(session_id, agent, summary_before)
+            if self._evidence_store is not None:
+                prune_read_results(
+                    agent, self._evidence_store, intent.buyer_id, session_id,
+                    keep_recent=self._context_evidence_keep_recent,
+                )
             self._bus.publish(session_id, "final.result", {"text": final_text})
             await self._remember_cache(intent, final_text, has_history)
             return SubmitIntentOutput(shopping_session_id=session_id, final_text=final_text)
@@ -347,7 +368,55 @@ class MainAgentOrchestrator:
                 if tool_name in _TASK_TOOL_NAMES:
                     self._bus.publish(session_id, "plan.update", _tasks_snapshot(agent))
                 self._observe_for_drift(session_id, tool_name, event)
+            elif isinstance(event, RequireUserConfirmEvent):
+                self._pending_confirmations[session_id] = event
+                self._bus.publish(
+                    session_id,
+                    "permission.request",
+                    {
+                        "reply_id": event.reply_id,
+                        "tool_calls": [call.model_dump(mode="json") for call in event.tool_calls],
+                    },
+                )
+                return "[permission] 该记忆写操作需要买家确认，请确认后继续。"
         return final_text
+
+    async def confirm_pending(self, session_id: str, confirmed: bool) -> str:
+        """Resume an AgentScope-native ASK without sharing the order approval path."""
+        pending = self._pending_confirmations.get(session_id)
+        agent = await self._sessions.get_or_create(session_id)
+        if pending is None:
+            return "[error] 当前会话没有等待确认的记忆写操作"
+        results = [
+            ConfirmResult(
+                confirmed=confirmed,
+                tool_call=call,
+                rules=call.suggested_rules if confirmed else None,
+            )
+            for call in pending.tool_calls
+        ]
+        intent = self.last_intent(session_id)
+        if intent is None:
+            return "[error] 找不到待确认操作所属会话"
+        snapshot = ShoppingContextSnapshot(
+            shopping_session_id=session_id,
+            buyer_id=intent.buyer_id,
+            locale=intent.locale,
+            currency=intent.currency,
+        )
+        token = ShoppingContext.set(snapshot)
+        try:
+            result = await self._consume_reply(
+                session_id,
+                agent,
+                [UserConfirmResultEvent(reply_id=pending.reply_id, confirm_results=results)],
+            )
+            self._pending_confirmations.pop(session_id, None)
+            self._bus.publish(session_id, "final.result", {"text": result})
+            return result
+        finally:
+            await self._sessions.persist(session_id)
+            ShoppingContext.reset(token)
 
     def _observe_for_drift(self, session_id: str, tool_name: Optional[str], event: Any) -> None:
         """把一次工具结果记进漂移轨迹（开关关时零开销）。"""

@@ -13,8 +13,13 @@ from typing import Optional
 @dataclass(frozen=True)
 class ProductSearchSpec:
     normalized_query: str
+    product_id: Optional[str] = None  # 已知 ID 时走精确查询，不进入相似召回
+    sku_id: Optional[str] = None
     category: Optional[str] = None
     ship_to: Optional[str] = None
+    origin_country: Optional[str] = None
+    material: Optional[str] = None
+    in_stock: bool = True
     locale: str = "zh-CN"
     top_k: int = 5
     # 到手价目标币种：命中 ship_to 时商品卡内联 landed_price（小计+运费+关税）
@@ -23,7 +28,7 @@ class ProductSearchSpec:
     price_max_major: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if not self.normalized_query or not self.normalized_query.strip():
+        if not (self.normalized_query and self.normalized_query.strip()) and not (self.product_id or self.sku_id):
             raise ValueError("ProductSearchSpec.normalized_query required")
         if self.top_k <= 0:
             raise ValueError("ProductSearchSpec.top_k 必须为正整数")

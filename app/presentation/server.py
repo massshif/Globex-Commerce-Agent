@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -29,6 +30,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from app.application.agents.orchestrator import SubmitIntentInput
@@ -37,8 +39,10 @@ from app.domain.queue.ports.task_queue import IntentTask, TaskStatus
 from app.presentation.connection import ConnectionManager
 from app.presentation.dto import (
     CancelOrderRequest,
+    PermissionConfirmRequest,
     SubmitIntentRequest,
     SubmitIntentResponse,
+    TradeConfirmRequest,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -148,6 +152,71 @@ def build_app() -> FastAPI:
         final_text = await _await_result(c, task_id, session_id)
         return SubmitIntentResponse(shopping_session_id=session_id, final_text=final_text)
 
+    @api.post("/ag-ui/agent")
+    async def ag_ui_agent(body: dict) -> StreamingResponse:
+        """AG-UI HTTP endpoint: accepts the official RunAgentInput shape.
+
+        The legacy commerce request fields remain accepted for CLI compatibility.
+        """
+        c = container()
+        messages = body.get("messages") or []
+        last_message = messages[-1] if messages else {}
+        content = last_message.get("content", "") if isinstance(last_message, dict) else ""
+        session_id = body.get("thread_id") or body.get("shopping_session_id") or f"session-{uuid.uuid4().hex[:8]}"
+        buyer_id = body.get("buyer_id") or body.get("forwarded_props", {}).get("buyer_id", "browser")
+        intent = SubmitIntentInput(
+            shopping_session_id=session_id,
+            buyer_id=buyer_id,
+            locale=body.get("locale", "zh-CN"),
+            currency=body.get("currency", "CNY"),
+            raw_query=body.get("raw_query") or content,
+        )
+        queue = c.bus.subscribe(session_id)
+        run_id = f"run-{uuid.uuid4().hex}"
+        message_id = f"msg-{uuid.uuid4().hex}"
+
+        async def stream():
+            def frame(event: dict) -> str:
+                return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            try:
+                yield frame({"type": "RUN_STARTED", "threadId": session_id, "runId": run_id})
+                yield frame({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
+                task = asyncio.create_task(_run_intent(c, intent))
+                saw_tokens = False
+                tool_ids: dict[str, str] = {}
+                while True:
+                    if task.done() and queue.empty():
+                        break
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if event.type == "token.delta":
+                        saw_tokens = True
+                    mapped = _to_ag_ui_events(event, session_id, run_id, message_id, tool_ids)
+                    if event.type == "final.result" and saw_tokens:
+                        mapped = [item for item in mapped if item.get("type") != "TEXT_MESSAGE_CONTENT"]
+                    for item in mapped:
+                        yield frame(item)
+                    if event.type == "final.result":
+                        yield frame({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+                        yield frame({"type": "RUN_FINISHED", "threadId": session_id, "runId": run_id})
+                    elif event.type == "error":
+                        yield frame({"type": "RUN_ERROR", "threadId": session_id, "runId": run_id,
+                                     "message": str(event.payload.get("message", "error"))})
+                await task
+            except Exception as err:  # noqa: BLE001
+                yield frame({"type": "RUN_ERROR", "threadId": session_id, "runId": run_id,
+                             "message": str(err)})
+            finally:
+                c.bus.unsubscribe(session_id, queue)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     @api.post("/commerce/intents/async")
     async def submit_intent_async(body: SubmitIntentRequest) -> dict:
         c = container()
@@ -163,6 +232,30 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="队列未启用，请使用 /commerce/intents")
         task_id = await _enqueue(c, intent)
         return {"shopping_session_id": session_id, "task_id": task_id, "state": "queued"}
+
+    @api.post("/commerce/sessions/{session_id}/confirm")
+    async def confirm_session_permission(
+        session_id: str, body: PermissionConfirmRequest,
+    ) -> dict:
+        result = await container().orchestrator.confirm_pending(session_id, body.confirmed)
+        return {"shopping_session_id": session_id, "final_text": result}
+
+    @api.post("/commerce/sessions/{session_id}/trade-confirm")
+    async def confirm_trade(session_id: str, body: TradeConfirmRequest) -> dict:
+        c = container()
+        # buyer_id is part of the authenticated/request context in this MVP;
+        # require the existing session's last intent to prevent cross-buyer approval.
+        intent = c.orchestrator.last_intent(session_id)
+        if intent is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        try:
+            result = c.trade_store.decide(body.operation_id, intent.buyer_id, session_id,
+                                          body.draft_hash, body.approved)
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        c.bus.publish(session_id, "confirmation.result", result)
+        c.bus.publish(session_id, "final.result", {"text": json.dumps(result, ensure_ascii=False)})
+        return result
 
     @api.get("/commerce/tasks/{task_id}")
     async def get_task(task_id: str) -> dict:
@@ -191,6 +284,37 @@ def build_app() -> FastAPI:
         except ValueError as err:
             raise HTTPException(status_code=404, detail=str(err)) from err
 
+    @api.get("/commerce/preferences/{buyer_id}")
+    async def list_preferences(buyer_id: str) -> list[dict]:
+        return [
+            {"buyer_id": item.buyer_id, "kind": item.kind, "statement": item.statement,
+             "created_at": item.created_at}
+            for item in await container().preference_store.list_by_buyer(buyer_id)
+        ]
+
+    @api.get("/commerce/context-evidence/{buyer_id}/{session_id}")
+    async def list_context_evidence(
+        buyer_id: str, session_id: str, page: int = 1, limit: int = 5,
+    ) -> list[dict]:
+        """Paginated lookup for archived tool evidence; buyer/session are part of the key."""
+        return container().evidence_store.list_recent(buyer_id, session_id, page=page, limit=limit)
+
+    @api.get("/commerce/sessions/{session_id}/history")
+    async def session_history(session_id: str, buyer_id: str) -> list[dict]:
+        """Reload durable business events after a page refresh; no model internals are replayed."""
+        return container().trade_store.history(buyer_id, session_id)
+
+    @api.get("/commerce/context-evidence/{buyer_id}/{session_id}/{evidence_id}")
+    async def get_context_evidence(buyer_id: str, session_id: str, evidence_id: str) -> dict:
+        evidence = container().evidence_store.get(buyer_id, session_id, evidence_id)
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="证据不存在或不属于当前买家会话")
+        return evidence
+
+    @api.get("/commerce/orders")
+    async def list_orders(buyer_id: str) -> list[dict]:
+        return container().trade_store.list_orders(buyer_id)
+
     @api.post("/commerce/orders/{order_id}/cancel")
     async def cancel_order_endpoint(order_id: str, body: CancelOrderRequest) -> dict:
         try:
@@ -199,6 +323,54 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(err)) from err
 
     return api
+
+
+async def _run_intent(c: Container, intent: SubmitIntentInput) -> str:
+    """Run through the configured queue when present, otherwise in-process."""
+    if c.task_queue is None:
+        return (await c.orchestrator.handle_intent(intent)).final_text
+    task_id = await _enqueue(c, intent)
+    return await _await_result(c, task_id, intent.shopping_session_id)
+
+
+def _to_ag_ui_events(event, session_id: str, run_id: str, message_id: str,
+                     tool_ids: dict[str, str] | None = None) -> list[dict]:
+    """Map a Globex event to the stable AG-UI event vocabulary."""
+    payload = event.payload if isinstance(event.payload, dict) else {"value": event.payload}
+    if event.type == "token.delta":
+        return [{"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id,
+                 "delta": str(payload.get("token", ""))}]
+    if event.type == "tool.invoke":
+        tool_name = str(payload.get("tool", "tool"))
+        tool_id = f"tool-{uuid.uuid4().hex}"
+        if tool_ids is not None:
+            tool_ids[tool_name] = tool_id
+        args = json.dumps(payload.get("args", {}), ensure_ascii=False)
+        return [
+            {"type": "TOOL_CALL_START", "toolCallId": tool_id,
+             "toolCallName": payload.get("tool", "tool")},
+            {"type": "TOOL_CALL_ARGS", "toolCallId": tool_id, "delta": args},
+            {"type": "TOOL_CALL_END", "toolCallId": tool_id},
+        ]
+    if event.type == "tool.result":
+        tool_name = str(payload.get("tool", "tool"))
+        return [{"type": "TOOL_CALL_RESULT", "messageId": message_id,
+                 "toolCallId": (tool_ids or {}).get(tool_name, payload.get("tool_call_id", "unknown")),
+                 "content": json.dumps(payload, ensure_ascii=False)}]
+    if event.type == "final.result":
+        # Cached replies may not emit token.delta; emit content once in that case.
+        return [{"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id,
+                 "delta": str(payload.get("text", ""))}]
+    if event.type == "agent.dispatch":
+        return [{"type": "STEP_STARTED", "stepName": payload.get("agent", "agent")}]
+    if event.type == "plan.update":
+        return [{"type": "STATE_SNAPSHOT", "snapshot": payload}]
+    if event.type == "shopping.form":
+        return [{"type": "CUSTOM", "name": "globex.shopping_form", "value": payload}]
+    if event.type == "error":
+        return []
+    # Preserve domain-specific observability without pretending it is a core AG-UI event.
+    return [{"type": "CUSTOM", "name": f"globex.{event.type}", "value": payload}]
 
 
 async def _queue_priority(c: Container, session_id: str) -> int:

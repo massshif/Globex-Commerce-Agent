@@ -35,6 +35,7 @@ from app.domain.queue.ports.task_queue import TaskQueue
 from app.infrastructure.cache.cached_embedding_client import CachedEmbeddingClient
 from app.infrastructure.cache.redis_cache import RedisCache
 from app.infrastructure.cache.semantic_cache import SemanticCache
+from app.infrastructure.context_evidence import ContextEvidenceStore
 from app.infrastructure.embedding.openai_embedding_client import OpenAIEmbeddingClient
 from app.infrastructure.eventbus import TradeEventBus
 from app.infrastructure.persistence.in_memory_repositories import (
@@ -54,6 +55,7 @@ from app.infrastructure.persistence.sql.repositories import (
     bootstrap_schema,
     create_engine,
 )
+from app.infrastructure.personal_skill_context import PersonalSkillContext
 from app.infrastructure.queue.redis_stream_queue import (
     RedisEventBackplane,
     RedisStreamTaskQueue,
@@ -64,8 +66,10 @@ from app.infrastructure.rag.category_knowledge import (
 )
 from app.infrastructure.rerank.http_reranker import HttpReranker
 from app.infrastructure.resilience import CircuitBreakerRegistry
+from app.infrastructure.semantic_memory import SemanticMemory
 from app.infrastructure.settings import Settings, load_settings
 from app.infrastructure.shared_breaker import SharedCircuitBreakerRegistry
+from app.infrastructure.sql.trade_store import TradeStore
 from app.infrastructure.throttle import GatewayThrottle
 from app.infrastructure.tracing import setup_tracing
 from app.infrastructure.vector.index_bootstrap import bootstrap_product_index
@@ -98,11 +102,18 @@ class Container:
     backplane: Optional[RedisEventBackplane]
     query_order: QueryOrderUseCase
     cancel_order: CancelOrderUseCase
+    preference_store: Any
+    order_repository: Any
     product_repo: InMemoryProductRepository
     embedder: Any
     vector_index: QdrantProductIndex
     knowledge_base: Any
     db_engine: Any
+    evidence_store: ContextEvidenceStore
+    personal_skill_context: PersonalSkillContext
+    semantic_memory: SemanticMemory
+    trade_store: TradeStore
+    conversation_store: Any
 
     async def startup(self) -> None:
         """建表 / 建向量库 / 建知识库。任一失败只告警，对应能力降级但服务可用。"""
@@ -132,6 +143,12 @@ async def build_container() -> Container:
 
     # ---- Infrastructure ----
     product_repo = InMemoryProductRepository()
+    evidence_store = ContextEvidenceStore(settings.data_dir)
+    # Skill 与语义记忆使用同一数据目录，但独立表和独立治理策略。
+    # 个人 Skill 由数据库目录驱动；append-only 快照默认关闭，按需开启。
+    personal_skill_context = PersonalSkillContext(settings.data_dir / "globex.db")
+    semantic_memory = SemanticMemory(settings.data_dir / "globex.db")
+    trade_store = TradeStore(settings.data_dir / "globex.db", await product_repo.list_all())
     bus = TradeEventBus()
     vector_index = QdrantProductIndex(settings)
     reranker = HttpReranker(settings) if settings.reranker_base_url else None
@@ -209,6 +226,10 @@ async def build_container() -> Container:
     # ---- Application ----
     catalog_search = CatalogSearchUseCase(
         product_repo, embedder=embedder, vector_index=vector_index, reranker=reranker,
+        hybrid_recall_enabled=settings.hybrid_recall_enabled,
+        bm25_weight=settings.retrieval_bm25_weight,
+        vector_weight=settings.retrieval_vector_weight,
+        evaluation_trace_enabled=settings.retrieval_eval_trace_enabled,
     )
     place_order = PlaceOrderUseCase(product_repo, order_repo)
     query_order = QueryOrderUseCase(order_repo)
@@ -216,9 +237,13 @@ async def build_container() -> Container:
 
     search_factory = SearchAgentFactory(
         settings, catalog_search, bus, knowledge_base, circuit_registry, throttle,
+        sequencing=sequencing_tracker, loop_detector=loop_detector, evidence_store=evidence_store,
     )
     trade_factory = TradeAgentFactory(
         settings, place_order, query_order, cancel_order, bus, circuit_registry, throttle,
+        sequencing=sequencing_tracker, loop_detector=loop_detector,
+        evidence_store=evidence_store,
+        trade_store=trade_store,
     )
     # 偏好选取器：主 Agent 注入与子 Agent 注入共用同一实例，口径不会两头漂。
     # 用带缓存的 embedder：重复的偏好 statement 不会每轮重复 embed。
@@ -231,6 +256,7 @@ async def build_container() -> Container:
         sequencing=sequencing_tracker,
         loop_detector=loop_detector,
         preference_selector=preference_selector,
+        evidence_store=evidence_store,
     )
     sessions = SessionRegistry(main_factory, session_store)
     orchestrator = MainAgentOrchestrator(
@@ -241,6 +267,8 @@ async def build_container() -> Container:
         drift_detector=drift_detector,
         preference_selector=preference_selector,
         preference_top_k=settings.preference_top_k,
+        evidence_store=evidence_store,
+        context_evidence_keep_recent=settings.context_evidence_keep_recent,
     )
 
     return Container(
@@ -253,9 +281,16 @@ async def build_container() -> Container:
         backplane=backplane,
         query_order=query_order,
         cancel_order=cancel_order,
+        preference_store=preference_store,
+        order_repository=order_repo,
         product_repo=product_repo,
         embedder=embedder,
         vector_index=vector_index,
         knowledge_base=knowledge_base,
         db_engine=db_engine,
+        evidence_store=evidence_store,
+        personal_skill_context=personal_skill_context,
+        semantic_memory=semantic_memory,
+        trade_store=trade_store,
+        conversation_store=conversation_store,
     )

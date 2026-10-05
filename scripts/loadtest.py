@@ -62,11 +62,13 @@ async def _run_stage(base_url: str, concurrency: int) -> None:
         return
 
     latencies.sort()
-    p = lambda q: latencies[min(len(latencies) - 1, int(len(latencies) * q))]
+    def percentile(q: float) -> float:
+        return latencies[min(len(latencies) - 1, int(len(latencies) * q))]
     throughput = len(latencies) / wall * 60
     print(
         f"[并发 {concurrency:>3}] 成功 {len(latencies):>3} 失败 {fails:>2} | "
-        f"P50 {statistics.median(latencies):5.1f}s P95 {p(0.95):5.1f}s P99 {p(0.99):5.1f}s | "
+        f"P50 {statistics.median(latencies):5.1f}s P95 {percentile(0.95):5.1f}s "
+        f"P99 {percentile(0.99):5.1f}s | "
         f"吞吐 {throughput:5.1f} intents/min"
     )
 

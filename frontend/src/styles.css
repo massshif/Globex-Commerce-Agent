@@ -28,6 +28,37 @@ header .meta {
   margin-bottom: 16px;
 }
 
+.nav-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.nav-tabs button {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 7px 14px;
+}
+
+.nav-tabs button.active {
+  background: #111827;
+  color: white;
+}
+
+.page-panel {
+  min-height: 400px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 24px;
+}
+
+.data-list {
+  padding-left: 20px;
+  line-height: 2;
+}
+
 .dot::before {
   content: "";
   display: inline-block;
