@@ -130,6 +130,16 @@ uv run python scripts/verify_parallel.py   # 并行验证：同轮多派 vs 串�
 uv run python scripts/eval_regression.py   # 评测回归：13 条 case，LLM judge 按 P0/P1/P2 Rubric 打分出报告
 ```
 
+### 准备演示数据
+
+商品目录启动时会自动加载 60 个内存种子商品；订单和买家偏好可以用下面的命令写入本地 SQLite，脚本可重复执行，不会重复插入演示记录：
+
+```bash
+make seed-demo
+```
+
+默认会为当前录屏买家 `buyer-4qw695` 和 `buyer-demo` 各写入 8 条偏好、12 条演示订单。演示数据使用 `GBX-DEMO-` 和 `demo-` 前缀，便于识别和清理。
+
 评测 case 支持 `prior_context` 字段：把跨会话已成立的事实（如上一 case 写入的长期偏好）告知 judge，
 否则 judge 只看本会话记录，会把"正确应用历史偏好"误判为"无据添加"。
 
