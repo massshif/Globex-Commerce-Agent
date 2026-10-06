@@ -162,8 +162,16 @@ def build_app() -> FastAPI:
         messages = body.get("messages") or []
         last_message = messages[-1] if messages else {}
         content = last_message.get("content", "") if isinstance(last_message, dict) else ""
-        session_id = body.get("thread_id") or body.get("shopping_session_id") or f"session-{uuid.uuid4().hex[:8]}"
-        buyer_id = body.get("buyer_id") or body.get("forwarded_props", {}).get("buyer_id", "browser")
+        # AG-UI uses camelCase field names; keep snake_case aliases for the
+        # legacy CLI payloads accepted by this endpoint.
+        forwarded_props = body.get("forwarded_props") or body.get("forwardedProps") or {}
+        session_id = (
+            body.get("thread_id")
+            or body.get("threadId")
+            or body.get("shopping_session_id")
+            or f"session-{uuid.uuid4().hex[:8]}"
+        )
+        buyer_id = body.get("buyer_id") or forwarded_props.get("buyer_id", "browser")
         intent = SubmitIntentInput(
             shopping_session_id=session_id,
             buyer_id=buyer_id,
