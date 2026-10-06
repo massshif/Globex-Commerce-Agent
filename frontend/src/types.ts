@@ -9,7 +9,8 @@ export type TradeEventType =
   | "context.compressed"
   | "model.fallback"
   | "final.result"
-  | "error";
+  | "error"
+  | "permission.request";
 
 export interface TradeEvent {
   type: TradeEventType;

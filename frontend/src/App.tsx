@@ -36,6 +36,7 @@ export default function App() {
   const [streaming, setStreaming] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingPermission, setPendingPermission] = useState(false);
   const [connected, setConnected] = useState(false);
   const [page, setPage] = useState<"chat" | "products" | "preferences" | "orders">("chat");
   const [preferences, setPreferences] = useState<any[]>([]);
@@ -60,6 +61,7 @@ export default function App() {
     setEvents([]);
     setStreaming("");
     setInput("");
+    setPendingPermission(false);
   };
 
   const loadConversation = (nextSessionId: string) => {
@@ -68,6 +70,26 @@ export default function App() {
     setTurns([]);
     setEvents([]);
     setStreaming("");
+    setPendingPermission(false);
+  };
+
+  const confirmPermission = async (confirmed: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API_BASE}/commerce/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed }),
+      });
+      const result = await response.json();
+      setTurns((prev) => [...prev, { role: "agent", text: result.final_text ?? "确认处理完成。" }]);
+      setPendingPermission(false);
+    } catch (error) {
+      setTurns((prev) => [...prev, { role: "agent", text: `[error] 确认失败：${error}` }]);
+    } finally {
+      setBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -126,6 +148,7 @@ export default function App() {
           setStreaming((prev) => prev + (event.payload.token ?? ""));
           return;
         }
+        if (event.type === "permission.request") setPendingPermission(true);
         setEvents((prev) => [...prev, event]);
         if (event.type === "final.result") {
           setStreaming("");
@@ -235,6 +258,16 @@ export default function App() {
           </div>
 
           <ProductCards events={events} />
+
+          {pendingPermission && (
+            <div className="permission-card">
+              <span>Agent 想把这条偏好加入长期记忆，是否确认？</span>
+              <div>
+                <button onClick={() => void confirmPermission(true)} disabled={busy}>确认记住</button>
+                <button onClick={() => void confirmPermission(false)} disabled={busy}>暂不记忆</button>
+              </div>
+            </div>
+          )}
 
           <div className="composer">
             <textarea
