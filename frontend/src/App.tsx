@@ -43,14 +43,20 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/commerce/sessions/${encodeURIComponent(sessionId)}/messages?buyer_id=${encodeURIComponent(buyerId)}`)
-      .then(async (response) => (response.ok ? response.json() : []))
-      .then((history: Turn[]) => {
-        if (!cancelled && history.length > 0) setTurns(history);
-      })
-      .catch(() => {
-        // A new session has no transcript yet; keep the empty conversation view.
-      });
+    const query = `buyer_id=${encodeURIComponent(buyerId)}`;
+    Promise.all([
+      fetch(`${API_BASE}/commerce/sessions/${encodeURIComponent(sessionId)}/messages?${query}`),
+      fetch(`${API_BASE}/commerce/sessions/${encodeURIComponent(sessionId)}/events?${query}`),
+    ]).then(async ([messagesResponse, eventsResponse]) => {
+      const history: Turn[] = messagesResponse.ok ? await messagesResponse.json() : [];
+      const restoredEvents: TradeEvent[] = eventsResponse.ok ? await eventsResponse.json() : [];
+      if (!cancelled) {
+        if (history.length > 0) setTurns(history);
+        if (restoredEvents.length > 0) setEvents(restoredEvents);
+      }
+    }).catch(() => {
+      // A new session has no transcript yet; keep the empty conversation view.
+    });
     return () => { cancelled = true; };
   }, [buyerId, sessionId]);
 

@@ -173,6 +173,28 @@ class JsonFileConversationStore(ConversationStore):
             )
         return turns[-limit:]
 
+    async def list_events(self, session_id: str, limit: int = 500) -> list[ConversationEventRecord]:
+        path = self._path(session_id)
+        if not path.exists():
+            return []
+        events: list[ConversationEventRecord] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if record.get("kind") != "event":
+                continue
+            events.append(
+                ConversationEventRecord(
+                    session_id=session_id,
+                    type=record.get("type", ""),
+                    payload=record.get("payload", {}),
+                    occurred_at=record.get("occurred_at", ""),
+                ),
+            )
+        return events[-limit:]
+
     async def touch_session(self, session_id: str, buyer_id: str, locale: str, currency: str) -> None:
         # 文件形态没有独立的会话主表，首轮写入时记一条元信息即可
         path = self._path(session_id)

@@ -181,6 +181,26 @@ class SqlConversationStore(ConversationStore):
             for row in rows
         ]
 
+    async def list_events(self, session_id: str, limit: int = 500) -> list[ConversationEventRecord]:
+        async with self._session_factory() as db:
+            rows = (
+                await db.scalars(
+                    select(ConversationEventRow)
+                    .where(ConversationEventRow.session_id == session_id)
+                    .order_by(ConversationEventRow.id)
+                    .limit(limit),
+                )
+            ).all()
+        return [
+            ConversationEventRecord(
+                session_id=row.session_id,
+                type=row.type,
+                payload=row.payload,
+                occurred_at=row.occurred_at,
+            )
+            for row in rows
+        ]
+
     async def find_session(self, session_id: str) -> Optional[dict]:
         async with self._session_factory() as db:
             row = await db.get(ConversationSessionRow, session_id)

@@ -317,6 +317,18 @@ def build_app() -> FastAPI:
             for turn in turns
         ]
 
+    @api.get("/commerce/sessions/{session_id}/events")
+    async def list_session_events(session_id: str, buyer_id: str) -> list[dict]:
+        """Restore the event timeline and product-search results for a session."""
+        c = container()
+        session = await c.conversation_store.find_session(session_id)
+        if session is None or session["buyer_id"] != buyer_id:
+            raise HTTPException(status_code=404, detail="会话不存在或不属于当前买家")
+        return [
+            {"type": event.type, "payload": event.payload, "occurred_at": event.occurred_at}
+            for event in await c.conversation_store.list_events(session_id)
+        ]
+
     @api.get("/commerce/context-evidence/{buyer_id}/{session_id}")
     async def list_context_evidence(
         buyer_id: str, session_id: str, page: int = 1, limit: int = 5,

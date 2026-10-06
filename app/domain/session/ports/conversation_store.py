@@ -65,6 +65,10 @@ class ConversationStore(ABC):
         """按 turn_index 升序返回该会话的对话流水。"""
 
     @abstractmethod
+    async def list_events(self, session_id: str, limit: int = 500) -> list[ConversationEventRecord]:
+        """按发生时间升序返回该会话的过程事件。"""
+
+    @abstractmethod
     async def touch_session(
         self,
         session_id: str,
