@@ -1,8 +1,9 @@
 """Seed repeatable local data for the recording/demo environment.
 
 The product catalog is intentionally an in-memory catalog and is rebuilt on
-startup. This script seeds only durable demo records: buyer preferences and
-sample confirmed/cancelled orders in the local SQLite store.
+startup. This script seeds only sample confirmed/cancelled orders in the local
+SQLite store. Personal preferences are never seeded: they must come from an
+explicit, confirmed user interaction.
 
 Usage::
 
@@ -22,17 +23,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "globex.db"
-
-PREFERENCES = [
-    ("like", "偏好轻量、可折叠、适合出差的产品"),
-    ("like", "喜欢黑色、深灰和低饱和度配色"),
-    ("like", "优先考虑天然材质或明确标注无塑料的商品"),
-    ("like", "重视到手价透明，需同时展示运费和关税"),
-    ("like", "优先选择库存充足、支持寄往美国的商品"),
-    ("dislike", "不喜欢过度装饰和高饱和度颜色"),
-    ("dislike", "避开没有材质说明的商品"),
-    ("dislike", "不接受明显超出预算的推荐"),
-]
 
 ORDER_TEMPLATES = [
     ("P1004", "P1004-S1", "AeroHush 主动降噪蓝牙耳机 Pro", 21900, "USD", 1, "CONFIRMED"),
@@ -74,23 +64,14 @@ def ensure_tables(db: sqlite3.Connection) -> None:
     )
 
 
-def seed(db_path: Path, buyer_ids: list[str]) -> tuple[int, int]:
+def seed(db_path: Path, buyer_ids: list[str]) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
-    inserted_preferences = 0
     inserted_orders = 0
     with sqlite3.connect(db_path) as db:
         db.execute("PRAGMA busy_timeout=10000")
         ensure_tables(db)
         for buyer_id in buyer_ids:
-            for kind, statement in PREFERENCES:
-                result = db.execute(
-                    "INSERT OR IGNORE INTO buyer_preferences"
-                    " (buyer_id, kind, statement, created_at) VALUES (?, ?, ?, ?)",
-                    (buyer_id, kind, statement, now.isoformat()),
-                )
-                inserted_preferences += result.rowcount
-
             for index, (product_id, sku_id, title, price, currency, quantity, status) in enumerate(
                 ORDER_TEMPLATES, start=1,
             ):
@@ -129,7 +110,7 @@ def seed(db_path: Path, buyer_ids: list[str]) -> tuple[int, int]:
                 )
                 inserted_orders += result.rowcount
         db.commit()
-    return inserted_preferences, inserted_orders
+    return inserted_orders
 
 
 def main() -> None:
@@ -138,9 +119,8 @@ def main() -> None:
     parser.add_argument("--buyer-id", default="buyer-4qw695", help="当前浏览器买家 ID")
     args = parser.parse_args()
     buyers = [args.buyer_id] if args.buyer_id == "buyer-demo" else [args.buyer_id, "buyer-demo"]
-    preferences, orders = seed(args.db, buyers)
+    orders = seed(args.db, buyers)
     print(f"demo buyers: {', '.join(buyers)}")
-    print(f"inserted preferences: {preferences}")
     print(f"inserted orders: {orders}")
     print(f"database: {args.db}")
 
