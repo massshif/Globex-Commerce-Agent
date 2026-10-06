@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HttpAgent, randomUUID } from "@ag-ui/client";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import EventTimeline from "./components/EventTimeline";
 import ProductCards from "./components/ProductCards";
 import type { TradeEvent } from "./types";
@@ -137,13 +139,17 @@ export default function App() {
             {turns.map((turn, index) => (
               <div key={index} className={`turn ${turn.role}`}>
                 <div className="who">{turn.role === "buyer" ? "我" : "Globex"}</div>
-                <div className="text">{turn.text}</div>
+                <div className="text">
+                  {turn.role === "agent" ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.text}</ReactMarkdown>
+                  ) : turn.text}
+                </div>
               </div>
             ))}
             {streaming && (
               <div className="turn agent streaming">
                 <div className="who">Globex</div>
-                <div className="text">{streaming}</div>
+                <div className="text"><ReactMarkdown remarkPlugins={[remarkGfm]}>{streaming}</ReactMarkdown></div>
               </div>
             )}
             {busy && !streaming && <div className="hint">Agent 正在处理……</div>}

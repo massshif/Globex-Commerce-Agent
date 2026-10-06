@@ -115,8 +115,56 @@ main {
 }
 
 .turn .text {
-  white-space: pre-wrap;
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.turn .text p {
+  margin: 0 0 0.7em;
+}
+
+.turn .text p:last-child {
+  margin-bottom: 0;
+}
+
+.turn .text h1,
+.turn .text h2,
+.turn .text h3 {
+  font-size: 1.05em;
+  line-height: 1.5;
+  margin: 0.9em 0 0.35em;
+}
+
+.turn .text ul,
+.turn .text ol {
+  margin: 0.3em 0 0.8em;
+  padding-left: 1.5em;
+}
+
+.turn .text li {
+  margin: 0.15em 0;
+}
+
+.turn .text table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+
+.turn .text th,
+.turn .text td {
+  border: 1px solid #e5e7eb;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.turn .text code {
+  background: #f3f4f6;
+  border-radius: 3px;
+  padding: 1px 3px;
 }
 
 .turn.buyer .text {
