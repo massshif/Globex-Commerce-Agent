@@ -292,6 +292,23 @@ def build_app() -> FastAPI:
             for item in await container().preference_store.list_by_buyer(buyer_id)
         ]
 
+    @api.get("/commerce/sessions/{session_id}/messages")
+    async def list_session_messages(session_id: str, buyer_id: str) -> list[dict]:
+        """Restore the durable conversation transcript for one buyer session."""
+        c = container()
+        session = await c.conversation_store.find_session(session_id)
+        if session is None or session["buyer_id"] != buyer_id:
+            raise HTTPException(status_code=404, detail="会话不存在或不属于当前买家")
+        turns = await c.conversation_store.list_turns(session_id)
+        return [
+            {
+                "role": turn.role,
+                "text": turn.content,
+                "created_at": turn.created_at,
+            }
+            for turn in turns
+        ]
+
     @api.get("/commerce/context-evidence/{buyer_id}/{session_id}")
     async def list_context_evidence(
         buyer_id: str, session_id: str, page: int = 1, limit: int = 5,

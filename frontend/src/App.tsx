@@ -35,7 +35,24 @@ export default function App() {
   const [preferences, setPreferences] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
-  const agAgent = useRef(new HttpAgent({ url: `${API_BASE}/ag-ui/agent`, headers: { "X-Buyer-Id": "browser" } }));
+  const agAgent = useRef(new HttpAgent({
+    url: `${API_BASE}/ag-ui/agent`,
+    threadId: sessionId,
+    headers: { "X-Buyer-Id": buyerId },
+  }));
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/commerce/sessions/${encodeURIComponent(sessionId)}/messages?buyer_id=${encodeURIComponent(buyerId)}`)
+      .then(async (response) => (response.ok ? response.json() : []))
+      .then((history: Turn[]) => {
+        if (!cancelled && history.length > 0) setTurns(history);
+      })
+      .catch(() => {
+        // A new session has no transcript yet; keep the empty conversation view.
+      });
+    return () => { cancelled = true; };
+  }, [buyerId, sessionId]);
 
   // WS 订阅：按会话接收 Agent 过程事件（StrictMode 下会双次挂载，用 closed 标记避免早关告警）
   useEffect(() => {
@@ -92,7 +109,7 @@ export default function App() {
       const agent = agAgent.current;
       agent.messages.push({ id: randomUUID(), role: "user", content: query });
       let answer = "";
-      await agent.runAgent({}, {
+      await agent.runAgent({ forwardedProps: { buyer_id: buyerId } }, {
         onTextMessageContentEvent: ({ event }) => { answer += event.delta ?? ""; setStreaming(answer); },
         onTextMessageEndEvent: () => { setTurns((prev) => [...prev, { role: "agent", text: answer }]); setStreaming(""); },
       });
