@@ -47,6 +47,19 @@ function summarize(event: TradeEvent): string {
   }
 }
 
+function formatEventTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(11, 19) || "--:--:--";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 export default function EventTimeline({ events }: { events: TradeEvent[] }) {
   return (
     <aside className="timeline">
@@ -57,7 +70,7 @@ export default function EventTimeline({ events }: { events: TradeEvent[] }) {
           <li key={index} className={`ev ${event.type.replace(".", "-")}`}>
             <div className="ev-head">
               <span className="tag">{LABELS[event.type] ?? event.type}</span>
-              <time>{event.occurred_at.slice(11, 19)}</time>
+            <time dateTime={event.occurred_at}>{formatEventTime(event.occurred_at)}</time>
             </div>
             <div className="ev-body">{summarize(event)}</div>
           </li>
