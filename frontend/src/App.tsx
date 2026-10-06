@@ -22,8 +22,14 @@ interface Turn {
   text: string;
 }
 
+interface ConversationSummary {
+  session_id: string;
+  preview: string;
+  last_active_at: string;
+}
+
 export default function App() {
-  const [sessionId] = useState(() => loadOrCreate("globex.session", "web"));
+  const [sessionId, setSessionId] = useState(() => loadOrCreate("globex.session", "web"));
   const [buyerId] = useState(() => loadOrCreate("globex.buyer", "buyer"));
   const [events, setEvents] = useState<TradeEvent[]>([]);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -34,12 +40,42 @@ export default function App() {
   const [page, setPage] = useState<"chat" | "products" | "preferences" | "orders">("chat");
   const [preferences, setPreferences] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
-  const agAgent = useRef(new HttpAgent({
-    url: `${API_BASE}/ag-ui/agent`,
-    threadId: sessionId,
-    headers: { "X-Buyer-Id": buyerId },
-  }));
+  const agAgent = useRef<HttpAgent | null>(null);
+
+  useEffect(() => {
+    agAgent.current = new HttpAgent({
+      url: `${API_BASE}/ag-ui/agent`,
+      threadId: sessionId,
+      headers: { "X-Buyer-Id": buyerId },
+    });
+  }, [buyerId, sessionId]);
+
+  const startNewConversation = () => {
+    const nextSessionId = `web-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem("globex.session", nextSessionId);
+    setSessionId(nextSessionId);
+    setTurns([]);
+    setEvents([]);
+    setStreaming("");
+    setInput("");
+  };
+
+  const loadConversation = (nextSessionId: string) => {
+    localStorage.setItem("globex.session", nextSessionId);
+    setSessionId(nextSessionId);
+    setTurns([]);
+    setEvents([]);
+    setStreaming("");
+  };
+
+  useEffect(() => {
+    fetch(`${API_BASE}/commerce/sessions?buyer_id=${encodeURIComponent(buyerId)}`)
+      .then(async (response) => (response.ok ? response.json() : []))
+      .then((items: ConversationSummary[]) => setConversations(items))
+      .catch(() => setConversations([]));
+  }, [buyerId, sessionId, turns.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +149,7 @@ export default function App() {
     setTurns((prev) => [...prev, { role: "buyer", text: query }]);
     try {
       const agent = agAgent.current;
+      if (!agent) throw new Error("会话还在初始化，请稍后重试");
       agent.messages.push({ id: randomUUID(), role: "user", content: query });
       let answer = "";
       await agent.runAgent({ forwardedProps: { buyer_id: buyerId } }, {
@@ -139,7 +176,26 @@ export default function App() {
   };
 
   return (
-    <div className="layout">
+    <div className="app-shell">
+      <aside className="conversation-sidebar">
+        <div className="sidebar-brand">Globex</div>
+        <button className="new-chat-button" onClick={startNewConversation}>＋ 新建对话</button>
+        <div className="sidebar-label">历史对话</div>
+        <div className="conversation-list">
+          {conversations.map((conversation) => (
+            <button
+              key={conversation.session_id}
+              className={`conversation-item ${conversation.session_id === sessionId ? "active" : ""}`}
+              onClick={() => loadConversation(conversation.session_id)}
+              title={conversation.preview}
+            >
+              <span>{conversation.preview || "新对话"}</span>
+            </button>
+          ))}
+          {conversations.length === 0 && <p className="sidebar-empty">还没有历史对话</p>}
+        </div>
+      </aside>
+      <div className="layout">
       <header>
         <h1>Globex 跨境购物助手</h1>
         <div className="meta">
@@ -203,6 +259,7 @@ export default function App() {
 
         <EventTimeline events={events} />
       </main>
+      </div>
     </div>
   );
 }

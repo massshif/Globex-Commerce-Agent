@@ -217,3 +217,26 @@ class JsonFileConversationStore(ConversationStore):
             if record.get("kind") == "session":
                 return {"session_id": session_id, **record}
         return {"session_id": session_id}
+
+    async def list_sessions(self, buyer_id: str, limit: int = 50) -> list[dict]:
+        sessions: list[dict] = []
+        for path in self._dir.glob("*.jsonl"):
+            session_id = path.stem
+            session = await self.find_session(session_id)
+            if not session or session.get("buyer_id") != buyer_id:
+                continue
+            preview = "新对话"
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("kind") == "turn" and record.get("role") == "buyer":
+                    preview = record.get("content", preview)
+                    break
+            sessions.append({
+                "session_id": session_id,
+                "preview": preview,
+                "last_active_at": session.get("last_active_at", ""),
+            })
+        return sessions[-limit:]

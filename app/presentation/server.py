@@ -317,6 +317,10 @@ def build_app() -> FastAPI:
             for turn in turns
         ]
 
+    @api.get("/commerce/sessions")
+    async def list_sessions(buyer_id: str, limit: int = 50) -> list[dict]:
+        return await container().conversation_store.list_sessions(buyer_id, limit=min(limit, 100))
+
     @api.get("/commerce/sessions/{session_id}/events")
     async def list_session_events(session_id: str, buyer_id: str) -> list[dict]:
         """Restore the event timeline and product-search results for a session."""

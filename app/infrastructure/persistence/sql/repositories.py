@@ -214,6 +214,34 @@ class SqlConversationStore(ConversationStore):
                 "last_active_at": row.last_active_at.isoformat() if row.last_active_at else "",
             }
 
+    async def list_sessions(self, buyer_id: str, limit: int = 50) -> list[dict]:
+        async with self._session_factory() as db:
+            rows = (
+                await db.scalars(
+                    select(ConversationSessionRow)
+                    .where(ConversationSessionRow.buyer_id == buyer_id)
+                    .order_by(ConversationSessionRow.last_active_at.desc())
+                    .limit(limit),
+                )
+            ).all()
+            result = []
+            for row in rows:
+                first = await db.scalar(
+                    select(ConversationMessageRow.content)
+                    .where(
+                        ConversationMessageRow.session_id == row.session_id,
+                        ConversationMessageRow.role == "buyer",
+                    )
+                    .order_by(ConversationMessageRow.turn_index)
+                    .limit(1),
+                )
+                result.append({
+                    "session_id": row.session_id,
+                    "preview": first or "新对话",
+                    "last_active_at": row.last_active_at.isoformat() if row.last_active_at else "",
+                })
+            return result
+
 
 class SqlOrderRepository(OrderRepository):
     def __init__(self, engine: AsyncEngine) -> None:

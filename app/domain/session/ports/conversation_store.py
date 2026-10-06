@@ -81,3 +81,7 @@ class ConversationStore(ABC):
     @abstractmethod
     async def find_session(self, session_id: str) -> Optional[dict]:
         """会话主记录，不存在返回 None。"""
+
+    @abstractmethod
+    async def list_sessions(self, buyer_id: str, limit: int = 50) -> list[dict]:
+        """按最近活跃时间返回买家的会话列表。"""
